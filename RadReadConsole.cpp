@@ -3,6 +3,9 @@
 #include <tchar.h>
 #include <crtdbg.h>
 
+#include <string>
+#include <deque>
+
 #include "RadReadConsole.h"
 
 #define ARRAY_X(a) (a), ARRAYSIZE(a)
@@ -10,16 +13,22 @@
 
 #ifdef UNICODE
 #define tmemmove wmemmove
+#define tmemcpy wmemcpy
 #define tmemset wmemset
 #define tChar UnicodeChar
+#define tstring wstring
 #else
 #define tmemmove memmove
+#define tmemcpy memcpy
 #define tmemset memset
 #define tChar AsciiChar
+#define tstring string
 #endif
 
 namespace
 {
+
+std::deque<std::tstring> g_history;
 
 inline COORD GetConsoleCursorPosition(const HANDLE h)
 {
@@ -165,6 +174,8 @@ BOOL RadReadConsole(
     //lpCharBuffer[*lpNumberOfCharsRead] = TEXT('\0');
     LPCTSTR wordbreak = TEXT("/\\=[]{}()");
 
+    auto g_history_it = g_history.end();
+
     INPUT_RECORD ir = {};
     DWORD read = 0;
     while (ReadConsoleInput(hConsoleInput, &ir, 1, &read))
@@ -214,6 +225,45 @@ BOOL RadReadConsole(
                     }
                 }
                 // TODO Ctrl+Right move to next word character
+                break;
+
+            case VK_UP:
+                if (ir.Event.KeyEvent.bKeyDown
+                    && (g_history_it == g_history.end() || std::next(g_history_it) != g_history.end())
+                    && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
+                {
+                    if (g_history_it == g_history.end())
+                        g_history_it = g_history.begin();
+                    else
+                        ++g_history_it;
+                    const SHORT diff = SHORT(*lpNumberOfCharsRead) - SHORT(g_history_it->size());
+                    tmemcpy(lpCharBuffer, g_history_it->data(), g_history_it->size());
+                    *lpNumberOfCharsRead = DWORD(g_history_it->size());
+                    DWORD written = 0;
+                    SetConsoleCursorPosition(hOutput, Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(offset)));
+                    WriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
+                    if (diff > 0)
+                        FillConsoleOutputCharacter(hOutput, TEXT(' '), diff, GetConsoleCursorPosition(hOutput), &written);
+                    offset = *lpNumberOfCharsRead;
+                }
+                break;
+
+            case VK_DOWN:
+                if (ir.Event.KeyEvent.bKeyDown
+                    && g_history_it != g_history.end() && g_history_it != g_history.begin()
+                    && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
+                {
+                    --g_history_it;
+                    const SHORT diff = SHORT(*lpNumberOfCharsRead) - SHORT(g_history_it->size());
+                    tmemcpy(lpCharBuffer, g_history_it->data(), g_history_it->size());
+                    *lpNumberOfCharsRead = DWORD(g_history_it->size());
+                    DWORD written = 0;
+                    SetConsoleCursorPosition(hOutput, Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(offset)));
+                    WriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
+                    if (diff > 0)
+                        FillConsoleOutputCharacter(hOutput, TEXT(' '), diff, GetConsoleCursorPosition(hOutput), &written);
+                    offset = *lpNumberOfCharsRead;
+                }
                 break;
 
             case VK_HOME:
@@ -319,6 +369,8 @@ BOOL RadReadConsole(
             case VK_RETURN:
                 if (ir.Event.KeyEvent.bKeyDown && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
                 {
+                    if (*lpNumberOfCharsRead > 0)
+                        g_history.push_front(std::tstring(lpCharBuffer, *lpNumberOfCharsRead));
                     const TCHAR text[] = TEXT("\r\n");
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);
                     DWORD written = 0;
