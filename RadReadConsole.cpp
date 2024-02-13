@@ -6,6 +6,7 @@
 
 #include <string>
 #include <deque>
+#include <vector>
 
 #include "RadReadConsole.h"
 
@@ -30,6 +31,21 @@ namespace
 {
 
 std::deque<std::tstring> g_history;
+
+std::vector<std::tstring> split(const std::tstring& str, const TCHAR delim)
+{
+    std::vector<std::tstring> result;
+    size_t start = 0;
+
+    for (size_t found = str.find(delim); found != std::tstring::npos; found = str.find(delim, start))
+    {
+        result.emplace_back(str.begin() + start, str.begin() + found);
+        start = found + 1;
+    }
+    if (start != str.size())
+        result.emplace_back(str.begin() + start, str.end());
+    return result;
+}
 
 inline COORD GetConsoleCursorPosition(const HANDLE h)
 {
@@ -79,6 +95,16 @@ inline void StrInsert(LPTSTR lpStr, LPDWORD lpLength, DWORD offset, TCHAR ch)
     tmemmove(lpStr + offset + 1, BUFFER_X(lpStr, lpLength, offset));
     lpStr[offset] = ch;
     ++(*lpLength);
+}
+
+inline DWORD StrInsert(LPTSTR lpStr, LPDWORD lpLength, DWORD offset, LPCTSTR lpInsert)
+{
+    _ASSERTE(offset <= *lpLength);
+    const DWORD length = DWORD(_tcslen(lpInsert));
+    tmemmove(lpStr + offset + length, BUFFER_X(lpStr, lpLength, offset));
+    tmemcpy(lpStr + offset, lpInsert, length);
+    *lpLength += length;
+    return length;
 }
 
 inline void StrOverwrite(LPTSTR lpStr, LPDWORD lpLength, DWORD offset, TCHAR ch)
@@ -161,6 +187,7 @@ BOOL RadReadConsole(
     // TODO If nNumberOfCharsToRead is less than 128 seems to use an internal buffer of 128
     // TODO Original seems to use an internal buffer that is not copied to until returning
     // TODO Handle ctrl characters ie ^Z for Ctrl+Z
+    // TODO Check for nNumberOfCharsToRead when inserting
     const HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
 
     CONSOLE_CURSOR_INFO cursor = {};
@@ -384,22 +411,41 @@ BOOL RadReadConsole(
                     if (*lpNumberOfCharsRead > 0 && lpCharBuffer[0] != TEXT(' '))
                     {
                         // Find alias
-                        TCHAR filename[MAX_PATH] = TEXT("");
-                        GetModuleFileName(NULL, ARRAY_X(filename));
-
-                        const DWORD end = StrFind(lpCharBuffer, lpNumberOfCharsRead, 0, TEXT(' '));
-                        const TCHAR save = std::exchange(lpCharBuffer[end], TEXT('\0'));
-
-                        TCHAR aliasbuffer[2 * 1024] = TEXT("");
-                        if (GetConsoleAlias(lpCharBuffer, ARRAY_X(aliasbuffer), PathFindFileName(filename)))
+                        static LPTSTR lpExeName = nullptr;
+                        if (lpExeName == nullptr)
                         {
-                            // TODO Replace $1, $2 ... $9 with appropriate text from lpCharBuffer
-
-                            *lpNumberOfCharsRead = DWORD(_tcslen(aliasbuffer));
-                            tmemcpy(lpCharBuffer, aliasbuffer, *lpNumberOfCharsRead);
+                            static TCHAR filename[MAX_PATH] = TEXT("");
+                            GetModuleFileName(NULL, ARRAY_X(filename));
+                            lpExeName = PathFindFileName(filename);
                         }
-                        else
-                            lpCharBuffer[end] = save;
+
+                        const std::vector<std::tstring> args = split(std::tstring(lpCharBuffer, *lpNumberOfCharsRead), TEXT(' ')); // TODO Avoid copy of lpCharBuffer into temp buffer
+
+                        if (GetConsoleAlias(const_cast<LPTSTR>(args[0].c_str()), lpCharBuffer, nNumberOfCharsToRead, lpExeName))
+                        {
+                            *lpNumberOfCharsRead = DWORD(_tcslen(lpCharBuffer));
+
+                            DWORD r = 0;
+                            while ((r = StrFind(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('$'))) < *lpNumberOfCharsRead)
+                            {
+                                switch (lpCharBuffer[r + 1])
+                                {
+                                case TEXT('1'): case TEXT('2'): case TEXT('3'): case TEXT('4'): case TEXT('5'):
+                                case TEXT('6'): case TEXT('7'): case TEXT('8'): case TEXT('9'):
+                                {
+                                    const int c = lpCharBuffer[r + 1] - TEXT('0');
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    if (c < args.size())
+                                        r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
+                                }
+                                break;
+
+                                default:
+                                    ++r;
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     const TCHAR text[] = TEXT("\r\n");
