@@ -105,16 +105,16 @@ inline DWORD StrFindNext(LPTSTR lpStr, LPDWORD lpLength, DWORD offset, LPCTSTR f
 
     if (offset <= *lpLength && _tcschr(find, lpStr[offset]) != nullptr)
     {
-        while (offset <= *lpLength && _tcschr(find, lpStr[offset]) != nullptr)
+        while (offset < *lpLength && _tcschr(find, lpStr[offset]) != nullptr)
             ++offset;
     }
     else
     {
-        while (offset <= *lpLength && lpStr[offset] != TEXT(' ') && _tcschr(find, lpStr[offset]) == nullptr)
+        while (offset < *lpLength && lpStr[offset] != TEXT(' ') && _tcschr(find, lpStr[offset]) == nullptr)
             ++offset;
     }
 
-    while (offset <= *lpLength && _tcschr(TEXT(" "), lpStr[offset]) != nullptr)
+    while (offset < *lpLength && _tcschr(TEXT(" "), lpStr[offset]) != nullptr)
         ++offset;
 
     return offset;
