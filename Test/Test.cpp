@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <tchar.h>
+#include <shlwapi.h>
 #include <cstdlib>
 #include <cstdio>
 
@@ -15,10 +16,25 @@ inline WORD GetConsoleTextAttribute(const HANDLE h)
     return bi.wAttributes;
 }
 
+// Defined incorrectly in consoleapi3.h
+inline BOOL AddConsoleAlias(
+    _In_ LPCTSTR Source,
+    _In_ LPCTSTR Target,
+    _In_ LPCTSTR ExeName
+)
+{
+    return AddConsoleAlias(const_cast<LPTSTR>(Source), const_cast<LPTSTR>(Target), const_cast<LPTSTR>(ExeName));
+}
+
+
 int _tmain(const int argc, const TCHAR* const argv[])
 {
     const HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
     const HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    LPCTSTR strExeName = PathFindFileName(argv[0]);
+    AddConsoleAlias(TEXT("x"), TEXT("exit"), strExeName);
+    AddConsoleAlias(TEXT("fb"), TEXT("foo bar $0 $1"), strExeName);
 
     typedef BOOL(*ReadConsoleT)(
         _In_ HANDLE hConsoleInput,

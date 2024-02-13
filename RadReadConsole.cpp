@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include <tchar.h>
 #include <crtdbg.h>
+#include <shlwapi.h>
 
 #include <string>
 #include <deque>
@@ -54,6 +55,14 @@ inline COORD Move(const HANDLE h, COORD p, SHORT d)
         ++p.Y;
     }
     return p;
+}
+
+inline DWORD StrFind(LPCTSTR lpStr, LPDWORD lpLength, DWORD offset, TCHAR ch)
+{
+    _ASSERTE(offset <= *lpLength);
+    while (offset < *lpLength && lpStr[offset] != ch)
+        ++offset;
+    return offset;
 }
 
 inline void StrErase(LPTSTR lpStr, LPDWORD lpLength, DWORD offset, DWORD length)
@@ -371,6 +380,28 @@ BOOL RadReadConsole(
                 {
                     if (*lpNumberOfCharsRead > 0)
                         g_history.push_front(std::tstring(lpCharBuffer, *lpNumberOfCharsRead));
+
+                    if (*lpNumberOfCharsRead > 0 && lpCharBuffer[0] != TEXT(' '))
+                    {
+                        // Find alias
+                        TCHAR filename[MAX_PATH] = TEXT("");
+                        GetModuleFileName(NULL, ARRAY_X(filename));
+
+                        const DWORD end = StrFind(lpCharBuffer, lpNumberOfCharsRead, 0, TEXT(' '));
+                        const TCHAR save = std::exchange(lpCharBuffer[end], TEXT('\0'));
+
+                        TCHAR aliasbuffer[2 * 1024] = TEXT("");
+                        if (GetConsoleAlias(lpCharBuffer, ARRAY_X(aliasbuffer), PathFindFileName(filename)))
+                        {
+                            // TODO Replace $1, $2 ... $9 with appropriate text from lpCharBuffer
+
+                            *lpNumberOfCharsRead = DWORD(_tcslen(aliasbuffer));
+                            tmemcpy(lpCharBuffer, aliasbuffer, *lpNumberOfCharsRead);
+                        }
+                        else
+                            lpCharBuffer[end] = save;
+                    }
+
                     const TCHAR text[] = TEXT("\r\n");
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);
                     DWORD written = 0;
