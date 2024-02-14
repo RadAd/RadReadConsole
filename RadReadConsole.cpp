@@ -47,6 +47,27 @@ std::vector<std::tstring> split(const std::tstring& str, const TCHAR delim)
     return result;
 }
 
+inline bool IsDoubleWidth(const TCHAR ch)
+{
+    switch (ch)
+    {
+    case TEXT('\0'):
+    case TEXT('\r'):
+    case TEXT('\n'):
+        return false;
+    default: return ch <= 26;
+    }
+}
+
+inline DWORD GetPrintWidth(LPCTSTR lpStr, const DWORD begin, const DWORD end)
+{
+    _ASSERTE(begin <= end);
+    DWORD w = 0;
+    for (DWORD i = begin; i < end; ++i)
+        w += IsDoubleWidth(lpStr[i]) ? 2 : 1;
+    return w;
+}
+
 inline COORD GetConsoleCursorPosition(const HANDLE h)
 {
     CONSOLE_SCREEN_BUFFER_INFO bi = {};
@@ -168,9 +189,36 @@ inline DWORD StrFindNext(LPTSTR lpStr, LPDWORD lpLength, DWORD offset, LPCTSTR f
 
 extern "C" {
 
+BOOL RadWriteConsole(
+    _In_ HANDLE hConsoleOutput,
+    _In_reads_(nNumberOfCharsToWrite) CONST VOID* lpBuffer,
+    _In_ DWORD nNumberOfCharsToWrite,
+    _Out_opt_ LPDWORD lpNumberOfCharsWritten,
+    _Reserved_ LPVOID lpReserved
+)
+{
+    LPCTSTR lpCharBuffer = (LPCTSTR) lpBuffer;
+    *lpNumberOfCharsWritten = 0;
+    DWORD NumberOfCharsWritten;
+    DWORD begin = 0;
+    for (DWORD end = begin; end < nNumberOfCharsToWrite; ++end)
+        if (IsDoubleWidth(lpCharBuffer[end]))
+        {
+            if (!WriteConsole(hConsoleOutput, lpCharBuffer + begin, end - begin, &NumberOfCharsWritten, lpReserved)) return FALSE;
+            *lpNumberOfCharsWritten += NumberOfCharsWritten;
+            const TCHAR chevron[] = { TEXT('^'), TCHAR(TEXT('A') + lpCharBuffer[end] - 1) };
+            if (!WriteConsole(hConsoleOutput, ARRAY_X(chevron), &NumberOfCharsWritten, lpReserved)) return FALSE;
+            *lpNumberOfCharsWritten += 1;
+            begin = end + 1;
+        }
+    if (!WriteConsole(hConsoleOutput, lpCharBuffer + begin, nNumberOfCharsToWrite - begin, &NumberOfCharsWritten, lpReserved)) return FALSE;
+    *lpNumberOfCharsWritten += NumberOfCharsWritten;
+    return TRUE;
+}
+
 BOOL RadReadConsole(
     _In_ HANDLE hConsoleInput,
-    _Out_writes_bytes_to_(nNumberOfCharsToRead * sizeof(TCHAR), *lpNumberOfCharsRead * sizeof(TCHAR%)) LPVOID lpBuffer,
+    _Inout_updates_bytes_to_(nNumberOfCharsToRead * sizeof(TCHAR), *lpNumberOfCharsRead * sizeof(TCHAR%)) LPVOID lpBuffer,
     _In_ DWORD nNumberOfCharsToRead,
     _Out_ _Deref_out_range_(<= , nNumberOfCharsToRead) LPDWORD lpNumberOfCharsRead,
     _In_opt_ PCONSOLE_READCONSOLE_CONTROL pInputControl
@@ -217,30 +265,35 @@ BOOL RadReadConsole(
     while (ReadConsoleInput(hConsoleInput, &ir, 1, &read))
     {
         _ASSERTE(*lpNumberOfCharsRead >= offset);
+        _ASSERTE(*lpNumberOfCharsRead <= nNumberOfCharsToRead);
         switch (ir.EventType)
         {
         case KEY_EVENT:
         {
             switch (ir.Event.KeyEvent.wVirtualKeyCode)
             {
+            case VK_SHIFT:
+            case VK_CONTROL:
+            case VK_MENU:
+                break;
+
             case VK_LEFT:
                 if (ir.Event.KeyEvent.bKeyDown && offset > 0)
                 {
                     if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
                     {
                         const DWORD newoffset = StrFindPrev(lpCharBuffer, lpNumberOfCharsRead, offset, wordbreak);
-                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), SHORT(newoffset - offset));
+                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(GetPrintWidth(lpCharBuffer, newoffset, offset)));
                         SetConsoleCursorPosition(hOutput, pos);
                         offset = newoffset;
                     }
                     else
                     {
-                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -1);
+                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), IsDoubleWidth(lpCharBuffer[offset - 1]) ? -2 : -1);
                         SetConsoleCursorPosition(hOutput, pos);
                         --offset;
                     }
                 }
-                // TODO Ctrl+Left move to next word character
                 break;
 
             case VK_RIGHT:
@@ -249,18 +302,17 @@ BOOL RadReadConsole(
                     if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
                     {
                         const DWORD newoffset = StrFindNext(lpCharBuffer, lpNumberOfCharsRead, offset, wordbreak);
-                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), SHORT(newoffset - offset));
+                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), SHORT(GetPrintWidth(lpCharBuffer, offset, newoffset)));
                         SetConsoleCursorPosition(hOutput, pos);
                         offset = newoffset;
                     }
                     else
                     {
-                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), 1);
+                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), IsDoubleWidth(lpCharBuffer[offset]) ? 2 : 1);
                         SetConsoleCursorPosition(hOutput, pos);
                         ++offset;
                     }
                 }
-                // TODO Ctrl+Right move to next word character
                 break;
 
             case VK_UP:
@@ -272,12 +324,12 @@ BOOL RadReadConsole(
                         g_history_it = g_history.begin();
                     else
                         ++g_history_it;
-                    const SHORT diff = SHORT(*lpNumberOfCharsRead) - SHORT(g_history_it->size());
+                    const SHORT diff = SHORT(GetPrintWidth(lpCharBuffer, 0, *lpNumberOfCharsRead)) - SHORT(GetPrintWidth(g_history_it->data(), 0, DWORD(g_history_it->size())));
+                    SetConsoleCursorPosition(hOutput, Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(GetPrintWidth(lpCharBuffer, 0, offset))));
                     tmemcpy(lpCharBuffer, g_history_it->data(), g_history_it->size());
                     *lpNumberOfCharsRead = DWORD(g_history_it->size());
                     DWORD written = 0;
-                    SetConsoleCursorPosition(hOutput, Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(offset)));
-                    WriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
+                    RadWriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
                     if (diff > 0)
                         FillConsoleOutputCharacter(hOutput, TEXT(' '), diff, GetConsoleCursorPosition(hOutput), &written);
                     offset = *lpNumberOfCharsRead;
@@ -290,12 +342,12 @@ BOOL RadReadConsole(
                     && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
                 {
                     --g_history_it;
-                    const SHORT diff = SHORT(*lpNumberOfCharsRead) - SHORT(g_history_it->size());
+                    const SHORT diff = SHORT(GetPrintWidth(lpCharBuffer, 0, *lpNumberOfCharsRead)) - SHORT(GetPrintWidth(g_history_it->data(), 0, DWORD(g_history_it->size())));
+                    SetConsoleCursorPosition(hOutput, Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(GetPrintWidth(lpCharBuffer, 0, offset))));
                     tmemcpy(lpCharBuffer, g_history_it->data(), g_history_it->size());
                     *lpNumberOfCharsRead = DWORD(g_history_it->size());
                     DWORD written = 0;
-                    SetConsoleCursorPosition(hOutput, Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(offset)));
-                    WriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
+                    RadWriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
                     if (diff > 0)
                         FillConsoleOutputCharacter(hOutput, TEXT(' '), diff, GetConsoleCursorPosition(hOutput), &written);
                     offset = *lpNumberOfCharsRead;
@@ -305,18 +357,19 @@ BOOL RadReadConsole(
             case VK_HOME:
                 if (ir.Event.KeyEvent.bKeyDown && offset > 0)
                 {
-                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -(SHORT(offset)));
+                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(GetPrintWidth(lpCharBuffer, 0, offset)));
                     SetConsoleCursorPosition(hOutput, pos);
                     offset = 0;
                 }
                 else if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) && offset > 0)
                 {
-                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -(SHORT(offset)));
+                    const DWORD width = GetPrintWidth(lpCharBuffer, 0, offset);
+                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(width));
                     StrErase(lpCharBuffer, lpNumberOfCharsRead, 0, offset);
                     DWORD written = 0;
                     SetConsoleCursorPosition(hOutput, pos);
-                    WriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
-                    FillConsoleOutputCharacter(hOutput, TEXT(' '), offset, GetConsoleCursorPosition(hOutput), &written);
+                    RadWriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
+                    FillConsoleOutputCharacter(hOutput, TEXT(' '), width, GetConsoleCursorPosition(hOutput), &written);
                     SetConsoleCursorPosition(hOutput, pos);
                     offset = 0;
                 }
@@ -325,15 +378,17 @@ BOOL RadReadConsole(
             case VK_END:
                 if (ir.Event.KeyEvent.bKeyDown && offset < *lpNumberOfCharsRead)
                 {
-                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), SHORT(*lpNumberOfCharsRead - offset));
+                    const DWORD width = GetPrintWidth(lpCharBuffer, offset, *lpNumberOfCharsRead);
+                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), SHORT(width));
                     SetConsoleCursorPosition(hOutput, pos);
                     offset = *lpNumberOfCharsRead;
                 }
                 else if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) && offset > 0)
                 {
-                    DWORD written = 0;
-                    FillConsoleOutputCharacter(hOutput, TEXT(' '), *lpNumberOfCharsRead - offset, GetConsoleCursorPosition(hOutput), &written);
+                    const DWORD width = GetPrintWidth(lpCharBuffer, offset, *lpNumberOfCharsRead);
                     StrErase(lpCharBuffer, lpNumberOfCharsRead, offset, *lpNumberOfCharsRead - offset);
+                    DWORD written = 0;
+                    FillConsoleOutputCharacter(hOutput, TEXT(' '), width, GetConsoleCursorPosition(hOutput), &written);
                 }
                 break;
 
@@ -351,9 +406,9 @@ BOOL RadReadConsole(
             case VK_ESCAPE:
                 if (ir.Event.KeyEvent.bKeyDown && *lpNumberOfCharsRead > 0)
                 {
-                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -(SHORT(offset)));
+                    const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(GetPrintWidth(lpCharBuffer, 0, offset)));
                     DWORD written = 0;
-                    FillConsoleOutputCharacter(hOutput, TEXT(' '), *lpNumberOfCharsRead, pos, &written);
+                    FillConsoleOutputCharacter(hOutput, TEXT(' '), GetPrintWidth(lpCharBuffer, 0, *lpNumberOfCharsRead), pos, &written);
                     SetConsoleCursorPosition(hOutput, pos);
                     StrErase(lpCharBuffer, lpNumberOfCharsRead, 0, *lpNumberOfCharsRead);
                     offset = 0;
@@ -366,24 +421,25 @@ BOOL RadReadConsole(
                     if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
                     {
                         const DWORD newoffset = StrFindPrev(lpCharBuffer, lpNumberOfCharsRead, offset, TEXT("\\/"));
-                        const DWORD dist = offset - newoffset;
-                        StrErase(lpCharBuffer, lpNumberOfCharsRead, newoffset, dist);
-                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(dist));
+                        const DWORD width = GetPrintWidth(lpCharBuffer, newoffset, offset);
+                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(width));
+                        StrErase(lpCharBuffer, lpNumberOfCharsRead, newoffset, offset - newoffset);
                         DWORD written = 0;
                         SetConsoleCursorPosition(hOutput, pos);
-                        WriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, newoffset), &written, nullptr);
-                        FillConsoleOutputCharacter(hOutput, TEXT(' '), dist, GetConsoleCursorPosition(hOutput), &written);
+                        RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, newoffset), &written, nullptr);
+                        FillConsoleOutputCharacter(hOutput, TEXT(' '), width, GetConsoleCursorPosition(hOutput), &written);
                         SetConsoleCursorPosition(hOutput, pos);
                         offset = newoffset;
                     }
                     else
                     {
+                        const DWORD width = IsDoubleWidth(lpCharBuffer[offset - 1]) ? 2 : 1;
+                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -SHORT(width));
                         StrErase(lpCharBuffer, lpNumberOfCharsRead, --offset, 1);
-                        const COORD pos = Move(hOutput, GetConsoleCursorPosition(hOutput), -1);
                         DWORD written = 0;
                         SetConsoleCursorPosition(hOutput, pos);
-                        WriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
-                        FillConsoleOutputCharacter(hOutput, TEXT(' '), 1, GetConsoleCursorPosition(hOutput), &written);
+                        RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
+                        FillConsoleOutputCharacter(hOutput, TEXT(' '), width, GetConsoleCursorPosition(hOutput), &written);
                         SetConsoleCursorPosition(hOutput, pos);
                     }
                 }
@@ -392,12 +448,13 @@ BOOL RadReadConsole(
             case VK_DELETE:
                 if (ir.Event.KeyEvent.bKeyDown && offset < *lpNumberOfCharsRead && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
                 {
+                    const DWORD width = IsDoubleWidth(lpCharBuffer[offset]) ? 2 : 1;
                     StrErase(lpCharBuffer, lpNumberOfCharsRead, offset, 1);
                     const COORD pos = GetConsoleCursorPosition(hOutput);
                     DWORD written = 0;
                     //SetConsoleCursorPosition(hOutput, pos);
-                    WriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
-                    FillConsoleOutputCharacter(hOutput, TEXT(' '), 1, GetConsoleCursorPosition(hOutput), &written);
+                    RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
+                    FillConsoleOutputCharacter(hOutput, TEXT(' '), width, GetConsoleCursorPosition(hOutput), &written);
                     SetConsoleCursorPosition(hOutput, pos);
                 }
                 break;
@@ -497,7 +554,7 @@ BOOL RadReadConsole(
                     const TCHAR text[] = TEXT("\r\n");
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);
                     DWORD written = 0;
-                    WriteConsole(hOutput, ARRAY_X(text), &written, nullptr);
+                    RadWriteConsole(hOutput, ARRAY_X(text) - 1, &written, nullptr);
                     SetConsoleCursorInfo(hOutput, &cursor);
                     return TRUE;
                 }
@@ -513,11 +570,11 @@ BOOL RadReadConsole(
                         else
                             StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
                         DWORD written = 0;
-                        WriteConsole(hOutput, &ir.Event.KeyEvent.uChar, 1, &written, nullptr);
-                        if (mode & ENABLE_INSERT_MODE)
+                        RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar, 1, &written, nullptr);
+                        if (mode & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
                         {
                             const COORD pos = GetConsoleCursorPosition(hOutput);
-                            WriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
+                            RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
                             SetConsoleCursorPosition(hOutput, pos);
                         }
                     }
@@ -529,6 +586,21 @@ BOOL RadReadConsole(
                         StrAppend(lpCharBuffer, lpNumberOfCharsRead, TEXT(" "));
                         lpCharBuffer[offset] = ir.Event.KeyEvent.uChar.tChar;
                         return TRUE;
+                    }
+                    else if (IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
+                    {
+                        if (mode & ENABLE_INSERT_MODE)
+                            StrInsert(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
+                        else
+                            StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
+                        DWORD written = 0;
+                        RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, &written, nullptr);
+                        if (mode & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
+                        {
+                            const COORD pos = GetConsoleCursorPosition(hOutput);
+                            RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
+                            SetConsoleCursorPosition(hOutput, pos);
+                        }
                     }
                 }
                 break;
