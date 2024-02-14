@@ -34,7 +34,10 @@ int _tmain(const int argc, const TCHAR* const argv[])
 
     LPCTSTR strExeName = PathFindFileName(argv[0]);
     AddConsoleAlias(TEXT("x"), TEXT("exit"), strExeName);
-    AddConsoleAlias(TEXT("fb"), TEXT("foo bar $0 $1"), strExeName);
+    AddConsoleAlias(TEXT("test1"), TEXT("--- [$1] [$2] [$3] [$4] [$5] [$6] [$7] [$8] [$9]"), strExeName);
+    AddConsoleAlias(TEXT("test2"), TEXT("--- $G $L $B $T $$"), strExeName);
+    AddConsoleAlias(TEXT("test3"), TEXT("--- $$ $$ $$"), strExeName);
+    AddConsoleAlias(TEXT("test4"), TEXT("--- [$*]"), strExeName);
 
     typedef BOOL(*ReadConsoleT)(
         _In_ HANDLE hConsoleInput,

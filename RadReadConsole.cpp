@@ -430,6 +430,39 @@ BOOL RadReadConsole(
                             {
                                 switch (lpCharBuffer[r + 1])
                                 {
+                                case TEXT('G'): case TEXT('g'):
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('>'));
+                                    ++r;
+                                    break;
+
+                                case TEXT('L'): case TEXT('l'):
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('<'));
+                                    ++r;
+                                    break;
+
+                                case TEXT('B'): case TEXT('b'):
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('|'));
+                                    ++r;
+                                    break;
+
+                                case TEXT('T'): case TEXT('t'):
+                                    // TODO This is not correct behaviour - it should return here and then on the next call return the rest
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('&'));
+                                    ++r;
+                                    break;
+
+#if 0 // Documentation claims this to be true, my tests show otherwise
+                                case TEXT('$'):
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('$'));
+                                    ++r;
+                                    break;
+#endif
+
                                 case TEXT('1'): case TEXT('2'): case TEXT('3'): case TEXT('4'): case TEXT('5'):
                                 case TEXT('6'): case TEXT('7'): case TEXT('8'): case TEXT('9'):
                                 {
@@ -439,6 +472,19 @@ BOOL RadReadConsole(
                                         r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
                                 }
                                 break;
+
+                                case TEXT('*'):
+                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                                    for (int c = 1; c < args.size(); ++c)
+                                    {
+                                        if (c != 1)
+                                        {
+                                            StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT(' '));
+                                            ++r;
+                                        }
+                                        r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
+                                    }
+                                    break;
 
                                 default:
                                     ++r;
