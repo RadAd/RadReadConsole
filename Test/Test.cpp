@@ -52,8 +52,7 @@ int _tmain(const int argc, const TCHAR* const argv[])
 
     while (true)
     {
-        DWORD written = 0;
-        WriteConsole(hOutput, prompt, DWORD(_tcslen(prompt)), &written, nullptr);
+        WriteConsole(hOutput, prompt, DWORD(_tcslen(prompt)), nullptr, nullptr);
 
         TCHAR buffer[128] = TEXT("Filled_in_the_buffer_before");
         DWORD read = 0;
@@ -87,7 +86,7 @@ int _tmain(const int argc, const TCHAR* const argv[])
         {
             const WORD wAttributes = GetConsoleTextAttribute(hOutput);
             SetConsoleTextAttribute(hOutput, FOREGROUND_RED);
-            WriteConsole(hOutput, buffer, read, &written, nullptr);
+            WriteConsole(hOutput, buffer, read, nullptr, nullptr);
             SetConsoleTextAttribute(hOutput, wAttributes);
         }
     }

@@ -236,10 +236,12 @@ inline void ScreenReplace(HANDLE hOutput, LPTSTR lpCharBuffer, LPDWORD lpNumberO
     const SHORT diff = SHORT(GetPrintWidth(lpCharBuffer, 0, *lpNumberOfCharsRead)) - SHORT(GetPrintWidth(lpText, 0, length));
     ScreenMoveCursor(hOutput, lpCharBuffer, poffset, 0);
     StrCopy(lpCharBuffer, lpNumberOfCharsRead, lpText, length);
-    DWORD written = 0;
-    RadWriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, &written, nullptr);
+    RadWriteConsole(hOutput, lpCharBuffer, *lpNumberOfCharsRead, nullptr, nullptr);
     if (diff > 0)
+    {
+        DWORD written = 0;
         FillConsoleOutputCharacter(hOutput, TEXT(' '), diff, GetConsoleCursorPosition(hOutput), &written);
+    }
     *poffset = *lpNumberOfCharsRead;
     _ASSERTE(*poffset <= *lpNumberOfCharsRead);
 }
@@ -257,21 +259,21 @@ BOOL RadWriteConsole(
 )
 {
     LPCTSTR lpCharBuffer = (LPCTSTR) lpBuffer;
-    *lpNumberOfCharsWritten = 0;
+    if (lpNumberOfCharsWritten) *lpNumberOfCharsWritten = 0;
     DWORD NumberOfCharsWritten;
     DWORD begin = 0;
     for (DWORD end = begin; end < nNumberOfCharsToWrite; ++end)
         if (IsDoubleWidth(lpCharBuffer[end]))
         {
             if (!WriteConsole(hConsoleOutput, lpCharBuffer + begin, end - begin, &NumberOfCharsWritten, lpReserved)) return FALSE;
-            *lpNumberOfCharsWritten += NumberOfCharsWritten;
+            if (lpNumberOfCharsWritten) *lpNumberOfCharsWritten += NumberOfCharsWritten;
             const TCHAR chevron[] = { TEXT('^'), TCHAR(TEXT('A') + lpCharBuffer[end] - 1) };
             if (!WriteConsole(hConsoleOutput, ARRAY_X(chevron), &NumberOfCharsWritten, lpReserved)) return FALSE;
-            *lpNumberOfCharsWritten += NumberOfCharsWritten;
+            if (lpNumberOfCharsWritten) *lpNumberOfCharsWritten += NumberOfCharsWritten;
             begin = end + 1;
         }
     if (!WriteConsole(hConsoleOutput, lpCharBuffer + begin, nNumberOfCharsToWrite - begin, &NumberOfCharsWritten, lpReserved)) return FALSE;
-    *lpNumberOfCharsWritten += NumberOfCharsWritten;
+    if (lpNumberOfCharsWritten) *lpNumberOfCharsWritten += NumberOfCharsWritten;
     return TRUE;
 }
 
@@ -574,8 +576,7 @@ BOOL RadReadConsole(
 
                     const TCHAR text[] = TEXT("\r\n");
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);
-                    DWORD written = 0;
-                    RadWriteConsole(hOutput, ARRAY_X(text) - 1, &written, nullptr);
+                    RadWriteConsole(hOutput, ARRAY_X(text) - 1, nullptr, nullptr);
                     SetConsoleCursorInfo(hOutput, &cursor);
                     return TRUE;
                 }
@@ -599,12 +600,11 @@ BOOL RadReadConsole(
                             StrInsert(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
                         else
                             StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
-                        DWORD written = 0;
-                        RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, &written, nullptr);
+                        RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, nullptr, nullptr);
                         if (mode & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
                         {
                             const COORD pos = GetConsoleCursorPosition(hOutput);
-                            RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), &written, nullptr);
+                            RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), nullptr, nullptr);
                             SetConsoleCursorPosition(hOutput, pos);
                         }
                     }
