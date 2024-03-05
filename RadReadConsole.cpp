@@ -406,7 +406,8 @@ BOOL RadReadConsole(
                         g_history_it = g_history.begin();
                     else
                         ++g_history_it;
-                    ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, g_history_it->data(), DWORD(g_history_it->size()));
+                    if (g_history_it != g_history.end())
+                        ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, g_history_it->data(), DWORD(g_history_it->size()));
                 }
                 break;
 
