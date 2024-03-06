@@ -306,6 +306,95 @@ BOOL RadWriteConsoleOutputCharacter(
     return TRUE;
 }
 
+void ExpandAlias(LPDWORD lpNumberOfCharsRead, LPTSTR lpCharBuffer, DWORD nNumberOfCharsToRead)
+{
+    if (*lpNumberOfCharsRead <= 0 || lpCharBuffer[0] == TEXT(' '))
+        return;
+
+    // Find alias
+    static LPTSTR lpExeName = nullptr;
+    if (lpExeName == nullptr)
+    {
+        static TCHAR filename[MAX_PATH] = TEXT("");
+        GetModuleFileName(NULL, ARRAY_X(filename));
+        lpExeName = PathFindFileName(filename);
+    }
+
+    const std::vector<std::tstring> args = split(std::tstring(lpCharBuffer, *lpNumberOfCharsRead), TEXT(' ')); // TODO Avoid copy of lpCharBuffer into temp buffer
+
+    if (GetConsoleAlias(const_cast<LPTSTR>(args[0].c_str()), lpCharBuffer, nNumberOfCharsToRead, lpExeName))
+    {
+        *lpNumberOfCharsRead = DWORD(_tcslen(lpCharBuffer));
+
+        DWORD r = 0;
+        while ((r = StrFind(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('$'))) < *lpNumberOfCharsRead)
+        {
+            switch (lpCharBuffer[r + 1])
+            {
+            case TEXT('G'): case TEXT('g'):
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('>'));
+                ++r;
+                break;
+
+            case TEXT('L'): case TEXT('l'):
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('<'));
+                ++r;
+                break;
+
+            case TEXT('B'): case TEXT('b'):
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('|'));
+                ++r;
+                break;
+
+            case TEXT('T'): case TEXT('t'):
+                // TODO This is not correct behaviour - it should return here and then on the next call return the rest
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('&'));
+                ++r;
+                break;
+
+#if 0 // Documentation claims this to be true, my tests show otherwise
+            case TEXT('$'):
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('$'));
+                ++r;
+                break;
+#endif
+
+            case TEXT('1'): case TEXT('2'): case TEXT('3'): case TEXT('4'): case TEXT('5'):
+            case TEXT('6'): case TEXT('7'): case TEXT('8'): case TEXT('9'):
+            {
+                const int c = lpCharBuffer[r + 1] - TEXT('0');
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                if (c < args.size())
+                    r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
+            }
+            break;
+
+            case TEXT('*'):
+                StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
+                for (int c = 1; c < args.size(); ++c)
+                {
+                    if (c != 1)
+                    {
+                        StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT(' '));
+                        ++r;
+                    }
+                    r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
+                }
+                break;
+
+            default:
+                ++r;
+                break;
+            }
+        }
+    }
+}
+
 BOOL RadReadConsole(
     _In_ HANDLE hConsoleInput,
     _Inout_updates_bytes_to_(nNumberOfCharsToRead * sizeof(TCHAR), *lpNumberOfCharsRead * sizeof(TCHAR%)) LPVOID lpBuffer,
@@ -489,91 +578,7 @@ BOOL RadReadConsole(
                     if (*lpNumberOfCharsRead > 0)
                         g_history.push_front(std::tstring(lpCharBuffer, *lpNumberOfCharsRead));
 
-                    if (*lpNumberOfCharsRead > 0 && lpCharBuffer[0] != TEXT(' '))
-                    {
-                        // Find alias
-                        static LPTSTR lpExeName = nullptr;
-                        if (lpExeName == nullptr)
-                        {
-                            static TCHAR filename[MAX_PATH] = TEXT("");
-                            GetModuleFileName(NULL, ARRAY_X(filename));
-                            lpExeName = PathFindFileName(filename);
-                        }
-
-                        const std::vector<std::tstring> args = split(std::tstring(lpCharBuffer, *lpNumberOfCharsRead), TEXT(' ')); // TODO Avoid copy of lpCharBuffer into temp buffer
-
-                        if (GetConsoleAlias(const_cast<LPTSTR>(args[0].c_str()), lpCharBuffer, nNumberOfCharsToRead, lpExeName))
-                        {
-                            *lpNumberOfCharsRead = DWORD(_tcslen(lpCharBuffer));
-
-                            DWORD r = 0;
-                            while ((r = StrFind(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('$'))) < *lpNumberOfCharsRead)
-                            {
-                                switch (lpCharBuffer[r + 1])
-                                {
-                                case TEXT('G'): case TEXT('g'):
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('>'));
-                                    ++r;
-                                    break;
-
-                                case TEXT('L'): case TEXT('l'):
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('<'));
-                                    ++r;
-                                    break;
-
-                                case TEXT('B'): case TEXT('b'):
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('|'));
-                                    ++r;
-                                    break;
-
-                                case TEXT('T'): case TEXT('t'):
-                                    // TODO This is not correct behaviour - it should return here and then on the next call return the rest
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('&'));
-                                    ++r;
-                                    break;
-
-#if 0 // Documentation claims this to be true, my tests show otherwise
-                                case TEXT('$'):
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT('$'));
-                                    ++r;
-                                    break;
-#endif
-
-                                case TEXT('1'): case TEXT('2'): case TEXT('3'): case TEXT('4'): case TEXT('5'):
-                                case TEXT('6'): case TEXT('7'): case TEXT('8'): case TEXT('9'):
-                                {
-                                    const int c = lpCharBuffer[r + 1] - TEXT('0');
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    if (c < args.size())
-                                        r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
-                                }
-                                break;
-
-                                case TEXT('*'):
-                                    StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                                    for (int c = 1; c < args.size(); ++c)
-                                    {
-                                        if (c != 1)
-                                        {
-                                            StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, TEXT(' '));
-                                            ++r;
-                                        }
-                                        r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
-                                    }
-                                    break;
-
-                                default:
-                                    ++r;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    ExpandAlias(lpNumberOfCharsRead, lpCharBuffer, nNumberOfCharsToRead);
 
                     const TCHAR text[] = TEXT("\r\n");
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);

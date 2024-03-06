@@ -20,6 +20,8 @@ BOOL RadWriteConsoleOutputCharacter(
     _Out_ LPDWORD lpNumberOfCharsWritten        // Could be more than nNumberOfCharsToWrite due to double-width characters
 );
 
+void ExpandAlias(LPDWORD lpNumberOfCharsRead, LPTSTR lpCharBuffer, DWORD nNumberOfCharsToRead);
+
 BOOL RadReadConsole(
     _In_ HANDLE hConsoleInput,
     _Inout_updates_bytes_to_(nNumberOfCharsToRead * sizeof(TCHAR), *lpNumberOfCharsRead * sizeof(TCHAR%)) LPVOID lpBuffer,
