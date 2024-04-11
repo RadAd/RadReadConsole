@@ -314,18 +314,24 @@ BOOL RadReadConsole(
     _In_opt_ PCONSOLE_READCONSOLE_CONTROL pInputControl
 )
 {
-    DWORD mode = 0;
-    if (!GetConsoleMode(hConsoleInput, &mode))
+    DWORD mode_input = 0;
+    if (!GetConsoleMode(hConsoleInput, &mode_input))
         return FALSE;
 
-    if ((mode & (ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) == 0)
+    if ((mode_input & (ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) == 0)
         return ReadConsole(hConsoleInput, lpBuffer, nNumberOfCharsToRead, lpNumberOfCharsRead, pInputControl);
 
     // TODO Original only return max nNumberOfCharsToRead to buffer even though it accepts the whole line before returning. Next call returns the next characters.
     // TODO If nNumberOfCharsToRead is less than 128 seems to use an internal buffer of 128
     // TODO Original seems to use an internal buffer that is not copied to until returning
     // TODO Check for nNumberOfCharsToRead when inserting
+
     const HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode_output = 0;
+    if (!GetConsoleMode(hOutput, &mode_output))
+        return FALSE;
+
+    SetConsoleMode(hOutput, mode_output & ~ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT); // ENABLE_VIRTUAL_TERMINAL_PROCESSING stops ENABLE_WRAP_AT_EOL_OUTPUT from working
 
     CONSOLE_CURSOR_INFO cursor = {};
     GetConsoleCursorInfo(hOutput, &cursor);
@@ -446,9 +452,9 @@ BOOL RadReadConsole(
             case VK_INSERT:
                 if (ir.Event.KeyEvent.bKeyDown)
                 {
-                    mode ^= ENABLE_INSERT_MODE; // Does it need to set the handle mode
+                    mode_input ^= ENABLE_INSERT_MODE; // Does it need to set the handle mode
                     CONSOLE_CURSOR_INFO local = cursor;
-                    if ((mode & ENABLE_INSERT_MODE) == 0)
+                    if ((mode_input & ENABLE_INSERT_MODE) == 0)
                         local.dwSize = 50;
                     SetConsoleCursorInfo(hOutput, &local);
                 }
@@ -579,6 +585,7 @@ BOOL RadReadConsole(
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);
                     RadWriteConsole(hOutput, ARRAY_X(text) - 1, nullptr, nullptr);
                     SetConsoleCursorInfo(hOutput, &cursor);
+                    SetConsoleMode(hOutput, mode_output);
                     return TRUE;
                 }
                 break;
@@ -593,16 +600,17 @@ BOOL RadReadConsole(
                         // BUG in original ConsoleInput doesn't properly insert the character
                         StrAppend(lpCharBuffer, lpNumberOfCharsRead, TEXT(" "));
                         lpCharBuffer[offset] = ir.Event.KeyEvent.uChar.tChar;
+                        SetConsoleMode(hOutput, mode_output);
                         return TRUE;
                     }
                     else if (ir.Event.KeyEvent.uChar.tChar != TEXT('\0'))
                     {
-                        if (mode & ENABLE_INSERT_MODE)
+                        if (mode_input & ENABLE_INSERT_MODE)
                             StrInsert(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
                         else
                             StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
                         RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, nullptr, nullptr);
-                        if (mode & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
+                        if (mode_input & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
                         {
                             const COORD pos = GetConsoleCursorPosition(hOutput);
                             RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), nullptr, nullptr);
@@ -617,6 +625,7 @@ BOOL RadReadConsole(
         }
         }
     }
+    SetConsoleMode(hOutput, mode_output);
     return TRUE;
 }
 
