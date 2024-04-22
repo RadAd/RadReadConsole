@@ -75,6 +75,13 @@ inline COORD GetConsoleCursorPosition(const HANDLE h)
     return bi.dwCursorPosition;
 }
 
+inline SMALL_RECT GetConsoleWindow(const HANDLE h)
+{
+    CONSOLE_SCREEN_BUFFER_INFO bi = {};
+    GetConsoleScreenBufferInfo(h, &bi);
+    return bi.srWindow;
+}
+
 inline COORD Move(const HANDLE h, COORD p, SHORT d)
 {
     CONSOLE_SCREEN_BUFFER_INFO bi = {};
@@ -617,8 +624,12 @@ BOOL RadReadConsole(
                         RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, nullptr, nullptr);
                         if (mode_input & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
                         {
-                            const COORD pos = GetConsoleCursorPosition(hOutput);
+                            COORD pos = GetConsoleCursorPosition(hOutput);
                             RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), nullptr, nullptr);
+                            const COORD endpos = Move(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - offset));
+                            const SMALL_RECT srWindow = GetConsoleWindow(hOutput);
+                            if (endpos.Y > srWindow.Bottom)
+                                pos.Y -= endpos.Y - srWindow.Bottom;
                             SetConsoleCursorPosition(hOutput, pos);
                         }
                     }
