@@ -30,6 +30,8 @@ BOOL RadReadConsole(
     _In_opt_ PCONSOLE_READCONSOLE_CONTROL pInputControl
 );
 
+BOOL WriteHistory(_In_ HANDLE hOutput);
+
 #ifdef __cplusplus
 }
 #endif

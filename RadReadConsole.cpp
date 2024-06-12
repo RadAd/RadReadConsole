@@ -30,6 +30,29 @@
 namespace
 {
 
+    class SaveConsoleMode
+    {
+    public:
+        SaveConsoleMode(HANDLE hConsoleHandle)
+            : m_hConsoleHandle(hConsoleHandle), m_dwMode(0)
+        {
+            if (!GetConsoleMode(m_hConsoleHandle, &m_dwMode))
+                OutputDebugString(TEXT("Error GetConsoleMode\n"));
+        }
+
+        ~SaveConsoleMode()
+        {
+            if (!SetConsoleMode(m_hConsoleHandle, m_dwMode))
+                OutputDebugString(TEXT("Error SetConsoleMode\n"));
+        }
+
+        DWORD mode() const { return m_dwMode; }
+
+    private:
+        HANDLE m_hConsoleHandle;
+        DWORD m_dwMode;
+    };
+
 std::deque<std::tstring> g_history;
 
 std::vector<std::tstring> split(const std::tstring& str, const TCHAR delim)
@@ -410,12 +433,19 @@ BOOL RadReadConsole(
     _In_opt_ PCONSOLE_READCONSOLE_CONTROL pInputControl
 )
 {
-    DWORD mode_input = 0;
+    *lpNumberOfCharsRead = 0;
+
+    DWORD mode_input;
     if (!GetConsoleMode(hConsoleInput, &mode_input))
-        return FALSE;
+        OutputDebugString(TEXT("Error GetConsoleMode hConsoleInput\n"));
 
     if ((mode_input & (ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) == 0)
+    {
+        OutputDebugString(TEXT("Error Invalid input console mode reverting to default\n"));
         return ReadConsole(hConsoleInput, lpBuffer, nNumberOfCharsToRead, lpNumberOfCharsRead, pInputControl);
+    }
+
+    mode_input |= ENABLE_INSERT_MODE;
 
     // TODO Original only return max nNumberOfCharsToRead to buffer even though it accepts the whole line before returning. Next call returns the next characters.
     // TODO If nNumberOfCharsToRead is less than 128 seems to use an internal buffer of 128
@@ -423,18 +453,30 @@ BOOL RadReadConsole(
     // TODO Check for nNumberOfCharsToRead when inserting
 
     const HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD mode_output = 0;
-    if (!GetConsoleMode(hOutput, &mode_output))
-        return FALSE;
+    SaveConsoleMode save_mode_output(hOutput);
 
-    SetConsoleMode(hOutput, mode_output & ~ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT); // ENABLE_VIRTUAL_TERMINAL_PROCESSING stops ENABLE_WRAP_AT_EOL_OUTPUT from working
+    {
+        DWORD mode_output = save_mode_output.mode();
+
+        // ENABLE_VIRTUAL_TERMINAL_PROCESSING stops ENABLE_WRAP_AT_EOL_OUTPUT from working
+        mode_output &= ~ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        mode_output |= ENABLE_WRAP_AT_EOL_OUTPUT;
+        if (!SetConsoleMode(hOutput, mode_output))
+            OutputDebugString(TEXT("Error SetConsoleMode hOutput\n"));
+
+        DWORD mode_output_check;
+        if (!GetConsoleMode(hOutput, &mode_output_check))
+            OutputDebugString(TEXT("Error GetConsoleMode hOutput\n"));
+
+        if (mode_output_check != mode_output)
+            OutputDebugString(TEXT("Error setting output console mode\n"));
+    }
 
     CONSOLE_CURSOR_INFO cursor = {};
     GetConsoleCursorInfo(hOutput, &cursor);
 
     LPTSTR lpCharBuffer = (LPTSTR) lpBuffer;
     DWORD offset = 0;
-    *lpNumberOfCharsRead = 0;
 
     if (pInputControl != nullptr)
     {
@@ -597,7 +639,6 @@ BOOL RadReadConsole(
                     StrAppend(lpCharBuffer, lpNumberOfCharsRead, text);
                     RadWriteConsole(hOutput, ARRAY_X(text) - 1, nullptr, nullptr);
                     SetConsoleCursorInfo(hOutput, &cursor);
-                    SetConsoleMode(hOutput, mode_output);
                     return TRUE;
                 }
                 break;
@@ -612,7 +653,6 @@ BOOL RadReadConsole(
                         // BUG in original ConsoleInput doesn't properly insert the character
                         StrAppend(lpCharBuffer, lpNumberOfCharsRead, TEXT(" "));
                         lpCharBuffer[offset] = ir.Event.KeyEvent.uChar.tChar;
-                        SetConsoleMode(hOutput, mode_output);
                         return TRUE;
                     }
                     else if (ir.Event.KeyEvent.uChar.tChar != TEXT('\0'))
@@ -641,7 +681,25 @@ BOOL RadReadConsole(
         }
         }
     }
-    SetConsoleMode(hOutput, mode_output);
+
+    return TRUE;
+}
+
+BOOL WriteHistory(_In_ HANDLE hOutput)
+{
+    for (auto it = g_history.rbegin(); it != g_history.rend(); ++it)
+    {
+        const auto& s = *it;
+        const DWORD cbBytesToWrite = DWORD(s.length() * sizeof(TCHAR));
+        DWORD cbBytesWritten;
+        BOOL fSuccess = WriteFile(hOutput, s.data(), cbBytesToWrite, &cbBytesWritten, nullptr);
+        if (!fSuccess || cbBytesToWrite != cbBytesWritten)
+            return FALSE;
+
+        fSuccess = WriteFile(hOutput, TEXT("\n"), sizeof(TCHAR), &cbBytesWritten, nullptr);
+        if (!fSuccess || sizeof(TCHAR) != cbBytesWritten)
+            return FALSE;
+    }
     return TRUE;
 }
 
