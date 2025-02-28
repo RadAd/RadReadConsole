@@ -397,7 +397,7 @@ void ExpandAlias(LPDWORD lpNumberOfCharsRead, LPTSTR lpCharBuffer, DWORD nNumber
             case TEXT('1'): case TEXT('2'): case TEXT('3'): case TEXT('4'): case TEXT('5'):
             case TEXT('6'): case TEXT('7'): case TEXT('8'): case TEXT('9'):
             {
-                const int c = lpCharBuffer[r + 1] - TEXT('0');
+                const unsigned int c = lpCharBuffer[r + 1] - TEXT('0');
                 StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
                 if (c < args.size())
                     r += StrInsert(lpCharBuffer, lpNumberOfCharsRead, r, args[c].c_str());
@@ -406,7 +406,7 @@ void ExpandAlias(LPDWORD lpNumberOfCharsRead, LPTSTR lpCharBuffer, DWORD nNumber
 
             case TEXT('*'):
                 StrErase(lpCharBuffer, lpNumberOfCharsRead, r, 2);
-                for (int c = 1; c < args.size(); ++c)
+                for (size_t c = 1; c < args.size(); ++c)
                 {
                     if (c != 1)
                     {
