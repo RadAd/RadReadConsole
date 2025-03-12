@@ -630,6 +630,9 @@ BOOL RadReadConsole(
             case VK_RETURN:
                 if (ir.Event.KeyEvent.bKeyDown && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
                 {
+                    if (offset < *lpNumberOfCharsRead)
+                        ScreenMoveCursor(hOutput, lpCharBuffer, &offset, *lpNumberOfCharsRead);
+
                     if (*lpNumberOfCharsRead > 0)
                         g_history.push_front(std::tstring(lpCharBuffer, *lpNumberOfCharsRead));
 
