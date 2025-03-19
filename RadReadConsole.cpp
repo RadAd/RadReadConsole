@@ -695,6 +695,10 @@ BOOL RadReadConsole(
 
                     if (GetEnvironmentVariable(TEXT("RAD_HISTORY_PIPE"), command, ARRAYSIZE(command)))
                     {
+                        const COORD pos = GetConsoleCursorPosition(hOutput);
+                        const TCHAR text[] = TEXT("\r\n");
+                        RadWriteConsole(hOutput, ARRAY_X(text) - 1, nullptr, nullptr);
+
                         SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
                         sa.bInheritHandle = TRUE;
 
@@ -716,7 +720,7 @@ BOOL RadReadConsole(
                         si.dwFlags |= STARTF_USESTDHANDLES;
                         si.hStdInput = hInputReadPipe.get();
                         si.hStdOutput = hOutputWritePipe.get();
-                        si.hStdError = hOutputWritePipe.get();
+                        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
                         PROCESS_INFORMATION pi = {};
                         if (!CreateProcess(nullptr, command, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi))
                             break;
@@ -732,6 +736,12 @@ BOOL RadReadConsole(
                         hInputWritePipe.reset();
 
                         WaitForSingleObject(hProcess.get(), INFINITE);
+
+
+                        COORD resetpos = GetConsoleCursorPosition(hOutput);
+                        --resetpos.Y;
+                        resetpos.X = pos.X;
+                        SetConsoleCursorPosition(hOutput, resetpos);
 
                         TCHAR buffer[1024];
                         DWORD chars = 0;
