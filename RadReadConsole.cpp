@@ -7,6 +7,7 @@
 #include <string>
 #include <deque>
 #include <vector>
+#include <memory>
 
 #include "RadReadConsole.h"
 
@@ -29,7 +30,6 @@
 
 namespace
 {
-
     class SaveConsoleMode
     {
     public:
@@ -52,6 +52,65 @@ namespace
         HANDLE m_hConsoleHandle;
         DWORD m_dwMode;
     };
+
+    struct HANDLE_Deleter
+    {
+        typedef HANDLE pointer;
+        void operator()(HANDLE h) { CloseHandle(h); }
+    };
+
+    template <class T, class U>
+    class unique_ptr_ptr
+    {
+    public:
+        typedef std::unique_ptr<T, U> unique_ptr;
+
+        unique_ptr_ptr(unique_ptr& up)
+            : up(up), p(nullptr)
+        {}
+
+        ~unique_ptr_ptr()
+        {
+            up.reset(p);
+        }
+
+        operator typename unique_ptr::pointer* ()
+        {
+            return &p;
+        }
+
+    private:
+        unique_ptr& up;
+        typename unique_ptr::pointer p;
+    };
+
+    template<class T, class U>
+    typename unique_ptr_ptr<T, U> operator&(std::unique_ptr<T, U>& up)
+    {
+        return unique_ptr_ptr<T, U>(up);
+    }
+
+    BOOL WriteFileANSI(HANDLE hFile, _In_NLS_string_(cchWideChar)LPCWCH lpWideCharStr, int cchWideChar = -1)
+    {
+        CHAR szAnsiCharStr[1024];
+        int bytes = WideCharToMultiByte(CP_ACP, 0, lpWideCharStr, cchWideChar, szAnsiCharStr, ARRAYSIZE(szAnsiCharStr), nullptr, nullptr);
+        DWORD dwWritten;
+        return WriteFile(hFile, szAnsiCharStr, bytes, &dwWritten, NULL);
+    }
+
+    BOOL ReadFileANSI(HANDLE hFile, _Out_writes_to_opt_(cchWideChar, return) LPWCH lpWideCharStr, int cchWideChar, LPDWORD pchars)
+    {
+        CHAR szAnsiCharStr[1024];
+        DWORD dwRead;
+        if (!ReadFile(hFile, szAnsiCharStr, ARRAYSIZE(szAnsiCharStr), &dwRead, NULL))
+            return FALSE;
+        int chars = MultiByteToWideChar(CP_ACP, 0, szAnsiCharStr, dwRead, lpWideCharStr, cchWideChar);
+        if (lpWideCharStr)
+            lpWideCharStr[chars] = L'\0';
+        if (pchars)
+            *pchars = chars;
+        return TRUE;
+    }
 
 std::deque<std::tstring> g_history;
 
@@ -279,6 +338,8 @@ inline void ScreenReplace(HANDLE hOutput, LPTSTR lpCharBuffer, LPDWORD lpNumberO
 }
 
 extern "C" {
+
+BOOL WriteHistoryANSI(_In_ HANDLE hOutput);
 
 BOOL RadWriteConsole(
     _In_ HANDLE hConsoleOutput,
@@ -627,6 +688,67 @@ BOOL RadReadConsole(
                 }
                 break;
 
+            case VK_F7:
+                if (ir.Event.KeyEvent.bKeyDown && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
+                {
+                    TCHAR command[1024] = TEXT("");
+
+                    if (GetEnvironmentVariable(TEXT("RAD_HISTORY_PIPE"), command, ARRAYSIZE(command)))
+                    {
+                        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
+                        sa.bInheritHandle = TRUE;
+
+                        std::unique_ptr<HANDLE, HANDLE_Deleter> hInputWritePipe;
+                        std::unique_ptr<HANDLE, HANDLE_Deleter> hInputReadPipe;
+                        if (!CreatePipe(&hInputReadPipe, &hInputWritePipe, &sa, 0))
+                            break;
+                        if (!SetHandleInformation(hInputWritePipe.get(), HANDLE_FLAG_INHERIT, 0))
+                            break;
+
+                        std::unique_ptr<HANDLE, HANDLE_Deleter> hOutputWritePipe;
+                        std::unique_ptr<HANDLE, HANDLE_Deleter> hOutputReadPipe;
+                        if (!CreatePipe(&hOutputReadPipe, &hOutputWritePipe, &sa, 0))
+                            break;
+                        if (!SetHandleInformation(hOutputReadPipe.get(), HANDLE_FLAG_INHERIT, 0))
+                            break;
+
+                        STARTUPINFO si = { sizeof(STARTUPINFO) };
+                        si.dwFlags |= STARTF_USESTDHANDLES;
+                        si.hStdInput = hInputReadPipe.get();
+                        si.hStdOutput = hOutputWritePipe.get();
+                        si.hStdError = hOutputWritePipe.get();
+                        PROCESS_INFORMATION pi = {};
+                        if (!CreateProcess(nullptr, command, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi))
+                            break;
+
+                        std::unique_ptr<HANDLE, HANDLE_Deleter> hThread(pi.hThread);
+                        std::unique_ptr<HANDLE, HANDLE_Deleter> hProcess(pi.hProcess);
+
+                        hInputReadPipe.reset();
+                        hOutputWritePipe.reset();
+
+                        if (!WriteHistoryANSI(hInputWritePipe.get()))
+                            break;
+                        hInputWritePipe.reset();
+
+                        WaitForSingleObject(hProcess.get(), INFINITE);
+
+                        TCHAR buffer[1024];
+                        DWORD chars = 0;
+                        if (!ReadFileANSI(hOutputReadPipe.get(), buffer, ARRAYSIZE(buffer) - 1, &chars))
+                            break;
+                        buffer[--chars] = TEXT('\0');
+                        hOutputReadPipe.reset();
+
+                        hThread.reset();
+                        hProcess.reset();
+
+                        if (chars > 0)
+                            ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, buffer, chars);
+                    }
+                }
+                break;
+
             case VK_RETURN:
                 if (ir.Event.KeyEvent.bKeyDown && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
                 {
@@ -701,6 +823,22 @@ BOOL WriteHistory(_In_ HANDLE hOutput)
 
         fSuccess = WriteFile(hOutput, TEXT("\n"), sizeof(TCHAR), &cbBytesWritten, nullptr);
         if (!fSuccess || sizeof(TCHAR) != cbBytesWritten)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+BOOL WriteHistoryANSI(_In_ HANDLE hOutput)
+{
+    for (auto it = g_history.rbegin(); it != g_history.rend(); ++it)
+    {
+        const auto& s = *it;
+        BOOL fSuccess = WriteFileANSI(hOutput, s.data(), static_cast<int>(s.length()));
+        if (!fSuccess)
+            return FALSE;
+
+        fSuccess = WriteFileANSI(hOutput, TEXT("\n"), 1);
+        if (!fSuccess)
             return FALSE;
     }
     return TRUE;

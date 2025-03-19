@@ -39,6 +39,8 @@ int _tmain(const int argc, const TCHAR* const argv[])
     AddConsoleAlias(TEXT("test3"), TEXT("--- $$ $$ $$"), strExeName);
     AddConsoleAlias(TEXT("test4"), TEXT("--- [$*]"), strExeName);
 
+    SetEnvironmentVariable(TEXT("RAD_HISTORY_PIPE"), TEXT(R"(fzf --tac --height=~10 --exact --scheme=history)"));
+
     typedef BOOL(*ReadConsoleT)(
         _In_ HANDLE hConsoleInput,
         _Out_writes_bytes_to_(nNumberOfCharsToRead * sizeof(TCHAR), *lpNumberOfCharsRead * sizeof(TCHAR%)) LPVOID lpBuffer,
