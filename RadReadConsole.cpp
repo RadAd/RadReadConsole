@@ -90,6 +90,39 @@ namespace
         return unique_ptr_ptr<T, U>(up);
     }
 
+    BOOL CreateProcess(_Inout_opt_ LPTSTR lpCommandLine, _Out_ LPPROCESS_INFORMATION lpProcessInformation, _Out_ PHANDLE phInputWritePipe, _Out_ PHANDLE phOutputReadPipe)
+    {
+        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
+        sa.bInheritHandle = TRUE;
+
+        std::unique_ptr<HANDLE, HANDLE_Deleter> hInputReadPipe;
+        std::unique_ptr<HANDLE, HANDLE_Deleter> hInputWritePipe;
+        if (!CreatePipe(&hInputReadPipe, &hInputWritePipe, &sa, 0))
+            return FALSE;
+        if (!SetHandleInformation(hInputWritePipe.get(), HANDLE_FLAG_INHERIT, 0))
+            return FALSE;
+
+        std::unique_ptr<HANDLE, HANDLE_Deleter> hOutputWritePipe;
+        std::unique_ptr<HANDLE, HANDLE_Deleter> hOutputReadPipe;
+        if (!CreatePipe(&hOutputReadPipe, &hOutputWritePipe, &sa, 0))
+            return FALSE;
+        if (!SetHandleInformation(hOutputReadPipe.get(), HANDLE_FLAG_INHERIT, 0))
+            return FALSE;
+
+        STARTUPINFO si = { sizeof(STARTUPINFO) };
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdInput = hInputReadPipe.get();
+        si.hStdOutput = hOutputWritePipe.get();
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        if (!CreateProcess(nullptr, lpCommandLine, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, lpProcessInformation))
+            return FALSE;
+
+        *phInputWritePipe = hInputWritePipe.release();
+        *phOutputReadPipe = hOutputReadPipe.release();
+
+        return TRUE;
+    }
+
     BOOL WriteFileANSI(HANDLE hFile, _In_NLS_string_(cchWideChar)LPCWCH lpWideCharStr, int cchWideChar = -1)
     {
         CHAR szAnsiCharStr[1024];
@@ -699,37 +732,20 @@ BOOL RadReadConsole(
                         const TCHAR text[] = TEXT("\r\n");
                         RadWriteConsole(hOutput, ARRAY_X(text) - 1, nullptr, nullptr);
 
-                        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES) };
-                        sa.bInheritHandle = TRUE;
-
                         std::unique_ptr<HANDLE, HANDLE_Deleter> hInputWritePipe;
-                        std::unique_ptr<HANDLE, HANDLE_Deleter> hInputReadPipe;
-                        if (!CreatePipe(&hInputReadPipe, &hInputWritePipe, &sa, 0))
-                            break;
-                        if (!SetHandleInformation(hInputWritePipe.get(), HANDLE_FLAG_INHERIT, 0))
-                            break;
-
-                        std::unique_ptr<HANDLE, HANDLE_Deleter> hOutputWritePipe;
                         std::unique_ptr<HANDLE, HANDLE_Deleter> hOutputReadPipe;
-                        if (!CreatePipe(&hOutputReadPipe, &hOutputWritePipe, &sa, 0))
-                            break;
-                        if (!SetHandleInformation(hOutputReadPipe.get(), HANDLE_FLAG_INHERIT, 0))
-                            break;
-
-                        STARTUPINFO si = { sizeof(STARTUPINFO) };
-                        si.dwFlags |= STARTF_USESTDHANDLES;
-                        si.hStdInput = hInputReadPipe.get();
-                        si.hStdOutput = hOutputWritePipe.get();
-                        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
                         PROCESS_INFORMATION pi = {};
-                        if (!CreateProcess(nullptr, command, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi))
+                        if (!CreateProcess(command, &pi, &hInputWritePipe, &hOutputReadPipe))
+                        {
+                            COORD resetpos = GetConsoleCursorPosition(hOutput);
+                            --resetpos.Y;
+                            resetpos.X = pos.X;
+                            SetConsoleCursorPosition(hOutput, resetpos);
                             break;
+                        }
 
                         std::unique_ptr<HANDLE, HANDLE_Deleter> hThread(pi.hThread);
                         std::unique_ptr<HANDLE, HANDLE_Deleter> hProcess(pi.hProcess);
-
-                        hInputReadPipe.reset();
-                        hOutputWritePipe.reset();
 
                         if (!WriteHistoryANSI(hInputWritePipe.get()))
                             break;
@@ -737,21 +753,20 @@ BOOL RadReadConsole(
 
                         WaitForSingleObject(hProcess.get(), INFINITE);
 
-
-                        COORD resetpos = GetConsoleCursorPosition(hOutput);
-                        --resetpos.Y;
-                        resetpos.X = pos.X;
-                        SetConsoleCursorPosition(hOutput, resetpos);
+                        {
+                            COORD resetpos = GetConsoleCursorPosition(hOutput);
+                            --resetpos.Y;
+                            resetpos.X = pos.X;
+                            SetConsoleCursorPosition(hOutput, resetpos);
+                        }
 
                         TCHAR buffer[1024];
                         DWORD chars = 0;
+
                         if (!ReadFileANSI(hOutputReadPipe.get(), buffer, ARRAYSIZE(buffer) - 1, &chars))
                             break;
                         buffer[--chars] = TEXT('\0');
                         hOutputReadPipe.reset();
-
-                        hThread.reset();
-                        hProcess.reset();
 
                         if (chars > 0)
                             ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, buffer, chars);
