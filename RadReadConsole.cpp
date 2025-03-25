@@ -675,16 +675,20 @@ BOOL RadReadConsole(
                         ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, offset - newoffset);
                     }
                     else
-                    {
                         ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, 1);
-                    }
                 }
                 break;
 
             case VK_DELETE:
-                if (ir.Event.KeyEvent.bKeyDown && offset < *lpNumberOfCharsRead && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
+                if (ir.Event.KeyEvent.bKeyDown && offset < *lpNumberOfCharsRead)
                 {
-                    ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, 1);
+                    if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
+                    {
+                        const DWORD newoffset = StrFindNext(lpCharBuffer, lpNumberOfCharsRead, offset, wordbreak);
+                        ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, newoffset - offset);
+                    }
+                    else
+                        ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, 1);
                 }
                 break;
 
