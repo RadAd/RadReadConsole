@@ -216,7 +216,7 @@ inline COORD Move(const HANDLE h, COORD p, SHORT d)
     return p;
 }
 
-inline DWORD CalcScroll(const HANDLE h, COORD p, SHORT len)
+inline SHORT CalcScroll(const HANDLE h, COORD p, SHORT len)
 {
     if (len < 0)
         return 0;
@@ -545,6 +545,14 @@ void ExpandAlias(LPDWORD lpNumberOfCharsRead, LPTSTR lpCharBuffer, DWORD nNumber
     }
 }
 
+struct Undo
+{
+    enum eType { INSERT, ERASE_FORWARD, ERASE_BACKWARD, REPLACE };
+    eType type;
+    DWORD offset;
+    std::tstring data;
+};
+
 BOOL RadReadConsole(
     _In_ HANDLE hConsoleInput,
     _Inout_updates_bytes_to_(nNumberOfCharsToRead * sizeof(TCHAR), *lpNumberOfCharsRead * sizeof(TCHAR%)) LPVOID lpBuffer,
@@ -597,6 +605,7 @@ BOOL RadReadConsole(
 
     LPTSTR lpCharBuffer = (LPTSTR) lpBuffer;
     DWORD offset = 0;
+    std::vector<Undo> undo;
 
     if (pInputControl != nullptr)
     {
@@ -671,7 +680,11 @@ BOOL RadReadConsole(
                     else
                         ++g_history_it;
                     if (g_history_it != g_history.end())
+                    {
+                        if (*lpNumberOfCharsRead > 0 && (undo.empty() || undo.back().type != Undo::REPLACE))
+                            undo.push_back({ Undo::REPLACE, offset, std::tstring(lpCharBuffer, *lpNumberOfCharsRead) });
                         ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, g_history_it->data(), DWORD(g_history_it->size()));
+                    }
                 }
                 break;
 
@@ -681,6 +694,8 @@ BOOL RadReadConsole(
                     && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
                 {
                     --g_history_it;
+                    if (*lpNumberOfCharsRead > 0 && (undo.empty() || undo.back().type != Undo::REPLACE))
+                        undo.push_back({ Undo::REPLACE, offset, std::tstring(lpCharBuffer, *lpNumberOfCharsRead) });
                     ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, g_history_it->data(), DWORD(g_history_it->size()));
                 }
                 break;
@@ -721,6 +736,7 @@ BOOL RadReadConsole(
             case VK_ESCAPE:
                 if (ir.Event.KeyEvent.bKeyDown && *lpNumberOfCharsRead > 0)
                 {
+                    undo.push_back({ Undo::REPLACE, offset, std::tstring(lpCharBuffer, *lpNumberOfCharsRead) });
                     ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, TEXT(""), 0);
                 }
                 break;
@@ -731,10 +747,15 @@ BOOL RadReadConsole(
                     if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
                     {
                         const DWORD newoffset = StrFindPrev(lpCharBuffer, lpNumberOfCharsRead, offset, wordbreak);
-                        ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, offset - newoffset);
+                        const DWORD length = offset - newoffset;
+                        undo.push_back({ Undo::ERASE_BACKWARD, offset, std::tstring(lpCharBuffer + offset - length, length) });
+                        ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, length);
                     }
                     else
+                    {
+                        undo.push_back({ Undo::ERASE_BACKWARD, offset, std::tstring(lpCharBuffer + offset - 1, 1) });
                         ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, 1);
+                    }
                 }
                 break;
 
@@ -744,10 +765,15 @@ BOOL RadReadConsole(
                     if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
                     {
                         const DWORD newoffset = StrFindNext(lpCharBuffer, lpNumberOfCharsRead, offset, wordbreak);
+                        const DWORD length = newoffset - offset;
+                        undo.push_back({ Undo::ERASE_FORWARD, offset, std::tstring(lpCharBuffer + offset, length) });
                         ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, newoffset - offset);
                     }
                     else
+                    {
+                        undo.push_back({ Undo::ERASE_FORWARD, offset, std::tstring(lpCharBuffer + offset, 1) });
                         ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, 1);
+                    }
                 }
                 break;
 
@@ -799,7 +825,10 @@ BOOL RadReadConsole(
                         hOutputReadPipe.reset();
 
                         if (chars > 0)
+                        {
+                            undo.push_back({ Undo::REPLACE, offset, std::tstring(lpCharBuffer, *lpNumberOfCharsRead) });
                             ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, buffer, chars);
+                        }
                     }
                 }
                 break;
@@ -845,15 +874,50 @@ BOOL RadReadConsole(
                             break;
 
                         const HANDLE hData = GetClipboardData(CF_UNICODETEXT);
-                        if (hData)
+                        const wchar_t* pClip = hData ? (const wchar_t*) GlobalLock(hData) : nullptr;
+                        if (pClip)
                         {
-                            const wchar_t* pClip = (const wchar_t*) GlobalLock(hData);
                             // TODO if (mode_input & ENABLE_INSERT_MODE)
+                            undo.push_back({ Undo::INSERT, offset, pClip });
                             ScreenInsert(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, pClip);
                             GlobalUnlock(hData);
                         }
 
                         CloseClipboard();
+                    }
+                    else if (ir.Event.KeyEvent.wVirtualKeyCode == TEXT('Z') && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0))
+                    {
+                        if (!undo.empty())
+                        {
+                            const Undo& u = undo.back();
+                            switch (u.type)
+                            {
+                            case Undo::INSERT:
+                                ScreenMoveCursor(hOutput, lpCharBuffer, &offset, u.offset);
+                                ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, (DWORD) u.data.length());
+                                break;
+
+                            case Undo::ERASE_FORWARD:
+                                ScreenMoveCursor(hOutput, lpCharBuffer, &offset, u.offset);
+                                ScreenInsert(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, u.data.c_str());
+                                ScreenMoveCursor(hOutput, lpCharBuffer, &offset, offset - ((DWORD) u.data.length()));
+                                break;
+
+                            case Undo::ERASE_BACKWARD:
+                                ScreenInsert(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, u.data.c_str());
+                                break;
+
+                            case Undo::REPLACE:
+                                ScreenReplace(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, u.data.c_str(), (DWORD) u.data.length());
+                                ScreenMoveCursor(hOutput, lpCharBuffer, &offset, u.offset);
+                                break;
+
+                            default:
+                                _ASSERT_EXPR(FALSE, TEXT("Unknown undo type"));
+                                break;
+                            }
+                            undo.pop_back();
+                        }
                     }
                     else if (ir.Event.KeyEvent.uChar.tChar != TEXT('\0'))
                     {
@@ -861,10 +925,12 @@ BOOL RadReadConsole(
                         {
                             TCHAR buffer[] = TEXT("_");
                             buffer[0] = ir.Event.KeyEvent.uChar.tChar;
+                            undo.push_back({ Undo::INSERT, offset, buffer });
                             ScreenInsert(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, buffer);
                         }
                         else
                         {
+                            // TODO undo.push_back({ Undo::OVERWRITE, offset, buffer });
                             StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
                             RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, nullptr, nullptr);
                             if (IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
