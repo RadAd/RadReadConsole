@@ -368,6 +368,21 @@ inline void ScreenReplace(HANDLE hOutput, LPTSTR lpCharBuffer, LPDWORD lpNumberO
     _ASSERTE(*poffset <= *lpNumberOfCharsRead);
 }
 
+inline void ScreenInsert(HANDLE hOutput, LPTSTR lpCharBuffer, LPDWORD lpNumberOfCharsRead, LPDWORD poffset, LPCTSTR lpText)
+{
+    const DWORD length = StrInsert(lpCharBuffer, lpNumberOfCharsRead, *poffset, lpText);
+    RadWriteConsole(hOutput, lpText, length, nullptr, nullptr);
+    *poffset += length;
+
+    COORD pos = GetConsoleCursorPosition(hOutput);
+    RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, *poffset), nullptr, nullptr);
+    const COORD endpos = Move(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - *poffset));
+    const SMALL_RECT srWindow = GetConsoleWindow(hOutput);
+    if (endpos.Y > srWindow.Bottom)
+        pos.Y -= endpos.Y - srWindow.Bottom;
+    SetConsoleCursorPosition(hOutput, pos);
+}
+
 }
 
 extern "C" {
@@ -708,16 +723,20 @@ BOOL RadReadConsole(
                         ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, offset - newoffset);
                     }
                     else
-                    {
                         ScreenEraseBack(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, 1);
-                    }
                 }
                 break;
 
             case VK_DELETE:
-                if (ir.Event.KeyEvent.bKeyDown && offset < *lpNumberOfCharsRead && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) == 0))
+                if (ir.Event.KeyEvent.bKeyDown && offset < *lpNumberOfCharsRead)
                 {
-                    ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, 1);
+                    if (ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
+                    {
+                        const DWORD newoffset = StrFindNext(lpCharBuffer, lpNumberOfCharsRead, offset, wordbreak);
+                        ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, newoffset - offset);
+                    }
+                    else
+                        ScreenEraseForward(hOutput, lpCharBuffer, lpNumberOfCharsRead, offset, 1);
                 }
                 break;
 
@@ -805,22 +824,48 @@ BOOL RadReadConsole(
                         lpCharBuffer[offset] = ir.Event.KeyEvent.uChar.tChar;
                         return TRUE;
                     }
+                    else if (ir.Event.KeyEvent.wVirtualKeyCode == TEXT('V') && ((ir.Event.KeyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0))
+                    {
+                        const HWND hWnd = ::GetConsoleWindow();
+                        int retry = 10;
+                        while (retry && !OpenClipboard(hWnd))
+                            --retry;
+                        if (retry <= 0)
+                            break;
+
+                        const HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+                        if (hData)
+                        {
+                            const wchar_t* pClip = (const wchar_t*) GlobalLock(hData);
+                            // TODO if (mode_input & ENABLE_INSERT_MODE)
+                            ScreenInsert(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, pClip);
+                            GlobalUnlock(hData);
+                        }
+
+                        CloseClipboard();
+                    }
                     else if (ir.Event.KeyEvent.uChar.tChar != TEXT('\0'))
                     {
                         if (mode_input & ENABLE_INSERT_MODE)
-                            StrInsert(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
-                        else
-                            StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
-                        RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, nullptr, nullptr);
-                        if (mode_input & ENABLE_INSERT_MODE || IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
                         {
-                            COORD pos = GetConsoleCursorPosition(hOutput);
-                            RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), nullptr, nullptr);
-                            const COORD endpos = Move(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - offset));
-                            const SMALL_RECT srWindow = GetConsoleWindow(hOutput);
-                            if (endpos.Y > srWindow.Bottom)
-                                pos.Y -= endpos.Y - srWindow.Bottom;
-                            SetConsoleCursorPosition(hOutput, pos);
+                            TCHAR buffer[] = TEXT("_");
+                            buffer[0] = ir.Event.KeyEvent.uChar.tChar;
+                            ScreenInsert(hOutput, lpCharBuffer, lpNumberOfCharsRead, &offset, buffer);
+                        }
+                        else
+                        {
+                            StrOverwrite(lpCharBuffer, lpNumberOfCharsRead, offset++, ir.Event.KeyEvent.uChar.tChar);
+                            RadWriteConsole(hOutput, &ir.Event.KeyEvent.uChar.tChar, 1, nullptr, nullptr);
+                            if (IsDoubleWidth(ir.Event.KeyEvent.uChar.tChar))
+                            {
+                                COORD pos = GetConsoleCursorPosition(hOutput);
+                                RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), nullptr, nullptr);
+                                const COORD endpos = Move(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - offset));
+                                const SMALL_RECT srWindow = GetConsoleWindow(hOutput);
+                                if (endpos.Y > srWindow.Bottom)
+                                    pos.Y -= endpos.Y - srWindow.Bottom;
+                                SetConsoleCursorPosition(hOutput, pos);
+                            }
                         }
                     }
                 }
