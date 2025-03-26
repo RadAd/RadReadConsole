@@ -216,6 +216,18 @@ inline COORD Move(const HANDLE h, COORD p, SHORT d)
     return p;
 }
 
+inline DWORD CalcScroll(const HANDLE h, COORD p, SHORT len)
+{
+    if (len < 0)
+        return 0;
+    const COORD endpos = Move(h, p, len);
+    const SMALL_RECT srWindow = GetConsoleWindow(h);
+    if (endpos.Y > srWindow.Bottom)
+        return endpos.Y - srWindow.Bottom;
+    else
+        return 0;
+}
+
 inline DWORD StrFind(LPCTSTR lpStr, LPDWORD lpLength, DWORD offset, TCHAR ch)
 {
     _ASSERTE(offset <= *lpLength);
@@ -370,17 +382,16 @@ inline void ScreenReplace(HANDLE hOutput, LPTSTR lpCharBuffer, LPDWORD lpNumberO
 
 inline void ScreenInsert(HANDLE hOutput, LPTSTR lpCharBuffer, LPDWORD lpNumberOfCharsRead, LPDWORD poffset, LPCTSTR lpText)
 {
+    _ASSERTE(*poffset <= *lpNumberOfCharsRead);
     const DWORD length = StrInsert(lpCharBuffer, lpNumberOfCharsRead, *poffset, lpText);
     RadWriteConsole(hOutput, lpText, length, nullptr, nullptr);
     *poffset += length;
 
     COORD pos = GetConsoleCursorPosition(hOutput);
     RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, *poffset), nullptr, nullptr);
-    const COORD endpos = Move(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - *poffset));
-    const SMALL_RECT srWindow = GetConsoleWindow(hOutput);
-    if (endpos.Y > srWindow.Bottom)
-        pos.Y -= endpos.Y - srWindow.Bottom;
+    pos.Y -= CalcScroll(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - *poffset));
     SetConsoleCursorPosition(hOutput, pos);
+    _ASSERTE(*poffset <= *lpNumberOfCharsRead);
 }
 
 }
@@ -860,10 +871,7 @@ BOOL RadReadConsole(
                             {
                                 COORD pos = GetConsoleCursorPosition(hOutput);
                                 RadWriteConsole(hOutput, BUFFER_X(lpCharBuffer, lpNumberOfCharsRead, offset), nullptr, nullptr);
-                                const COORD endpos = Move(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - offset));
-                                const SMALL_RECT srWindow = GetConsoleWindow(hOutput);
-                                if (endpos.Y > srWindow.Bottom)
-                                    pos.Y -= endpos.Y - srWindow.Bottom;
+                                pos.Y -= CalcScroll(hOutput, pos, (SHORT) (*lpNumberOfCharsRead - offset));
                                 SetConsoleCursorPosition(hOutput, pos);
                             }
                         }
